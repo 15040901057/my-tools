@@ -8,8 +8,8 @@ const program = new Command();
 
 program
   .name('create-component')
-  .description('🚀 快速生成 Vue/React 组件或页面')
-  .argument('<name>', '组件或页面名称（支持 kebab-case，如 user-profile）')
+  .description('🚀 生成组件/页面，并自动注册路由（仅页面）')
+  .argument('<name>', '名称（如 user-profile）')
   .option('-t, --type <type>', '类型: component | page', 'component')
   .action((name, options) => {
     createFile(name, options.type);
@@ -18,48 +18,43 @@ program
 program.parse();
 
 function createFile(componentName, type) {
-  // 输入校验
   if (!['component', 'page'].includes(type)) {
     console.error('❌ 类型必须是 "component" 或 "page"');
     process.exit(1);
   }
 
-  // 转换为 PascalCase（UserCard）
   const pascalName = componentName
     .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join('');
 
-  // 检测项目框架（Vue / React）
+  // 检测框架
   const pkgPath = path.join(process.cwd(), 'package.json');
   let framework = 'vue';
   if (fs.existsSync(pkgPath)) {
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-      if ((pkg.dependencies && pkg.dependencies.react) || 
-          (pkg.devDependencies && pkg.devDependencies.react)) {
+      if ((pkg.dependencies?.react || pkg.devDependencies?.react)) {
         framework = 'react';
       }
     } catch (e) {
-      console.warn('⚠️ 无法解析 package.json，使用默认模板 (Vue)');
+      console.warn('⚠️ 无法解析 package.json，使用默认 (Vue)');
     }
   }
 
-  // 确定输出目录
+  // 决定目录和文件名
   const baseDir = type === 'page' ? 'views' : 'components';
   const outDir = path.join(process.cwd(), 'src', baseDir, pascalName);
-  const fileName = framework === 'react' 
-    ? `${pascalName}.jsx` 
-    : `${pascalName}.vue`;
-
-  // 安全检查：避免覆盖
+  const fileName = framework === 'react' ? `${pascalName}.jsx` : `${pascalName}.vue`;
   const filePath = path.join(outDir, fileName);
+
+  // 防覆盖
   if (fs.existsSync(filePath)) {
     console.warn(`⚠️ 文件已存在，跳过: ${filePath}`);
     return;
   }
 
-  // 生成模板内容
+  // 生成组件/页面内容
   let template = '';
   if (framework === 'react') {
     template = `import React from 'react';
@@ -94,12 +89,56 @@ export default {
 </style>`;
   }
 
-  // 创建目录并写入文件
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(filePath, template);
+  console.log(`✅ 创建 ${framework.toUpperCase()} ${type}: ${path.relative(process.cwd(), filePath)}`);
 
-  // 成功提示
-  const typeName = type === 'page' ? '页面' : '组件';
-  console.log(`✅ 成功创建 ${framework.toUpperCase()} ${typeName}:`);
-  console.log(`   ${path.relative(process.cwd(), filePath)}`);
+  // 🔥 如果是页面，尝试生成路由
+  if (type === 'page') {
+    generateRoute(pascalName, componentName, framework);
+  }
+}
+
+function generateRoute(pascalName, kebabName, framework) {
+  // 路由文件路径（可按需调整）
+  const routeFilePath = path.join(process.cwd(), 'src', 'router', 'routes.js');
+
+  // 如果路由文件不存在，跳过
+  if (!fs.existsSync(routeFilePath)) {
+    console.warn('⚠️ 未找到 src/router/routes.js，跳过路由注册');
+    return;
+  }
+
+  const routeContent = fs.readFileSync(routeFilePath, 'utf8');
+
+  // 检查是否已存在该路由
+  if (routeContent.includes(`/${kebabName}`) || routeContent.includes(pascalName)) {
+    console.warn(`⚠️ 路由 /${kebabName} 已存在，跳过注册`);
+    return;
+  }
+
+  // 构建新路由项
+  let newRoute = '';
+  if (framework === 'react') {
+    newRoute = `
+  {
+    path: '/${kebabName}',
+    element: React.lazy(() => import('../views/${pascalName}/${pascalName}'))
+  },`;
+  } else {
+    newRoute = `
+  {
+    path: '/${kebabName}',
+    component: () => import('../views/${pascalName}/${pascalName}.vue')
+  },`;
+  }
+
+  // 插入到 routes 数组中（在最后一个 ] 之前）
+  const updatedContent = routeContent.replace(
+    /(\s*\]\s*;?\s*)$/,
+    `${newRoute}$1`
+  );
+
+  fs.writeFileSync(routeFilePath, updatedContent);
+  console.log(`✅ 自动注册路由: /${kebabName}`);
 }
